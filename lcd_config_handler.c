@@ -21,16 +21,21 @@
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <syslog.h>
+#include <dirent.h>
 
 #define DEBUG
 #define SOURCE_VERSION "1.0.0"
+#define FILE_NUM_MAX 64
+#define BUF_SIZE 2048
+#define TURE 0
+#define FALSE -1
+
 
 #ifdef DEBUG
 #define DBG(...) fprintf(stderr, " DBG(%s, %s(), %d): ", __FILE__, __FUNCTION__, __LINE__); fprintf(stderr, __VA_ARGS__)
 #else
 #define DBG(...)
 #endif
-
 
 enum Platform
 {
@@ -59,6 +64,7 @@ enum ForceFlag
 	ForceOff = 0,
 	ForceOn
 };
+
 struct cmdarg 
 {
 	enum Platform platform;
@@ -66,6 +72,130 @@ struct cmdarg
 	enum DsiMode dsi_mode;
 	enum ForceFlag force_flag;
 };
+
+struct current_file{
+	int num;
+	char *file_ptr[FILE_NUM_MAX];
+};
+
+struct current_file global_file_info;
+
+
+/* create_directory function
+* @szDirectoryPath: there must be "/" at the end, like "./out/"
+ */
+char create_directory( const char *szDirectoryPath , mode_t  iDirPermission)
+{
+
+	if ( NULL == szDirectoryPath ) {
+		DBG( "[%s][%d][%s][parameter < szDirectoryPath > for < CreateDirectory > should not be NULL]\n" , \
+			__FILE__ , __LINE__ , __FUNCTION__ );
+
+		return FALSE;
+	}
+
+	const int iPathLength = strlen( szDirectoryPath ) ;
+
+	if ( iPathLength > PATH_MAX ) {
+		DBG("[%s][%d][%s][the path length(%d) exceeds system max path length(%d)]\n" , \
+			__FILE__ , __LINE__ , __FUNCTION__ , iPathLength , PATH_MAX );
+		return FALSE;
+	}
+
+	char szPathBuffer[ PATH_MAX ] = { 0 };
+
+	memcpy( szPathBuffer , szDirectoryPath , iPathLength );
+	DBG("memcpy end\n");
+	DBG("szPathBuffer = %s \n", szPathBuffer);
+	DBG("iPathLength = %d \n", iPathLength);
+	int i;
+	for ( i = 0 ; i < iPathLength ; ++i ) {
+		char *refChar = &(szPathBuffer[ i ]);
+
+		if ( ( '/' == *refChar ) && ( 0 != i ) ) {
+
+			*refChar = '\0';
+
+			int iStatus = access( szPathBuffer , F_OK );
+
+			DBG("iStatus = %d \n", iStatus);
+			DBG("szPathBuffer = %s \n", szPathBuffer);
+			if ( 0 != iStatus ) {
+				if ( ( ENOTDIR == errno ) || ( ENOENT == errno ) ) {				
+					iStatus = mkdir( szPathBuffer , iDirPermission );
+					
+					if ( 0 != iStatus ) {
+						DBG("[%s][%d][%s][< mkdir > fail , ErrCode:%d , ErrMsg:%s]\n" , \
+							__FILE__ , __LINE__ , __FUNCTION__ , errno , strerror( errno ) );
+
+						return FALSE;						
+					}					
+				} else {
+
+					DBG("[%s][%d][%s][< access > fail , RetCode: %d , ErrCode:%d , ErrMsg:%s]\n" , \
+						__FILE__ , __LINE__ , __FUNCTION__ , iStatus , errno , strerror( errno ) );
+
+					return FALSE;
+				}
+			} else 
+				DBG("The directory already here .\n");
+
+			*refChar = '/';
+		}
+	}
+
+	return TURE;
+
+}
+
+
+
+int trave_dir(char* path)
+{
+	DIR *d; 
+	struct dirent *file; 
+	struct stat buf;    
+
+	if(!(d = opendir(path))) {
+        	printf("error opendir %s!!!\\n",path);
+        	return -1;
+    	}
+	
+    	chdir(path);//Change the dir. Add this, so that it can scan the children dir
+
+	printf("Files under current directory are below: \n");
+    	while((file = readdir(d)) != NULL)
+    	{
+
+        	if(strncmp(file->d_name, ".", 1) == 0) //skip the "." and ".." dir
+            		continue;
+
+      	 	if(stat(file->d_name, &buf) >= 0 && !S_ISDIR(buf.st_mode) )
+	        {
+	        	int i = 0;
+	        	printf("%s",file->d_name);
+//	    		printf("\\tfile size=%d\\n",buf.st_size);
+//	                printf("\\tfile last modify time=%d\\n",buf.st_mtime);
+			if (malloc(strlen(file->d_name) + 1) != NULL) {
+				global_file_info.file_ptr[i++] = file->d_name;
+				global_file_info.num++;
+				printf("\n");
+			} else {
+				fprintf(stderr, "cannot open, please check it out. \n");
+				return -1; 
+			}
+	        }
+	
+  	 }
+   	 closedir(d);
+
+	 if (global_file_info.num == 0) {
+	 	fprintf(stderr, "No file here. \n");
+	 	return -1; 
+ 	}
+	 
+    	 return 0;
+}
 
 
 
@@ -75,13 +205,17 @@ void help(char *progname)
   fprintf(stderr, "-----------------------------------------------------------------------\n");
   fprintf(stderr, "Usage: %s\n" \
                   "\t-m | -s		platform selection, \"m\" stands for mtk, \"s\" is sprd, and it 's necessary to select one of them.\n" \
-                  "\t-t  [0 | 1 ]	source file type, it supports 2 types so far, and it 's necessary to select one type of them.\n" \
+                  "\t-t  [0 | 1 ]	source file type, it supports 2 types so far, and it 's necessary to select one of them.\n" \
                   "\t-h		show the help information.\n" \
                   "\t-v		show the version.\n" , progname);
   
-  fprintf(stderr, "-----------------------------------------------------------------------\n");
-  fprintf(stderr, "Example:\n" \
+//  fprintf(stderr, "-----------------------------------------------------------------------\n");
+  fprintf(stderr, "Example1:\n" \
                   "./lcd_config_handler -p m -t 0 -d f\n");
+  fprintf(stderr, "Example2:\n" \
+                  "./lcd_config_handler -h\n");
+  fprintf(stderr, "Example3:\n" \
+                  "./lcd_config_handler -v\n");
  
   fprintf(stderr, "-----------------------------------------------------------------------\n");
 }
@@ -95,7 +229,7 @@ int main(int argc, char *argv[])
 	DBG("this is lcd_config_handler\n");
 
 	while(1) {
-		int option_index = 0, c=0, cal = 0;
+		int option_index = 0, c=0;
 		static struct option long_options[] = \
 		{
 		        {"h", no_argument, 0, 0},
@@ -169,14 +303,16 @@ int main(int argc, char *argv[])
 				}
 				break;
 
+			 /* f */
 			 case 5:
-				config.dsi_mode= Gen;
+				config.force_flag= ForceOn;
 				break;
-			
+				
+			 /* v */
 			 case 6:
-			 	  printf("lcd config handler Version: %s\n" \
-   				            "Compilation Date.....: %s\n" \
-				            "Compilation Time.....: %s\n", SOURCE_VERSION, __DATE__, __TIME__);
+			 	printf("Lcd config handler Version: %s\n" \
+   				          "Compilation Date.....: %s\n" \
+				          "Compilation Time.....: %s\n", SOURCE_VERSION, __DATE__, __TIME__);
 				return 0;
 
 		        default:
@@ -208,7 +344,7 @@ int main(int argc, char *argv[])
 	}
 	
 	if (error_flag && config.force_flag == ForceOff) {
-		fprintf(stderr, "some arguments are missing, do you wanna use the default config?\n");
+		
 		printf("please input your choice(\"y\" or \"n\")\n");
 		if (getchar() != 'y')
 			return -1;			
@@ -217,6 +353,59 @@ int main(int argc, char *argv[])
 	DBG("platform = %d, type = %d, dsi_mode = %d, force_flag =%d\n", config.platform,
 		config.type, config.dsi_mode, config.force_flag);
 
+
+	if (trave_dir(".") < 0 ) {
+		fprintf(stderr, "trave_dir error, exit.\n");
+		return -1;
+	}
+
+	/* create the "out" directory */
+	if (create_directory("./out/", S_IRWXU | S_IRWXG |S_IRWXO))
+		fprintf(stderr, "create \"out\" false, exit it.\n");
+		
+
+	/*Extract the data from the source file according to the type*/
+	int j = 0;
+	while (j < global_file_info.num) {
+		FILE * file_s, * file_d;
+		char byte, flag = 0, buf[BUF_SIZE] = {0};
+		if ((file_s = fopen(global_file_info.file_ptr[j], "r")) == NULL) {
+			fprintf(stderr, "%s open fail and skip it.\n", global_file_info.file_ptr[j++]);
+			continue;
+		}
+
+		chdir("./out/");
+		if ((file_d = fopen(global_file_info.file_ptr[j], "w")) == NULL) {
+			fprintf(stderr, "%s open fail and skip it.\n", global_file_info.file_ptr[j++]);
+			continue;
+		}
+		
+		chdir("..");
+		j++;
+		
+		switch (config.type) {
+			case Type0:
+				while((byte = getc(file_s)) != EOF) {		
+					if (byte == '0')
+						flag = 1;
+					else
+						flag = 0;
+
+					if ((byte == 'x' || byte == 'X') && flag)
+						flag = 2;
+					else
+						flag = 0;
+
+					
+
+						
+
+				}
+			break;
+			default:
+			break;
+		}
+	}
 	
 
 	return 0;
