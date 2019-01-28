@@ -2,7 +2,7 @@
  * lcd_config_handler.c
  *
  *  Created on: 4 Sep, 2015
- *      Author: zhoujianxiang
+ *      Author: orange
  */
  
 #include <stdio.h>
